@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, createContext, useContext } from 'react';
-import { initializeApp } from 'firebase/app';
+import { initializeApp, FirebaseError } from 'firebase/app';
 import { 
     getFirestore, 
     collection, 
@@ -18,22 +18,57 @@ import {
     signInWithEmailAndPassword,
     signOut
 } from 'firebase/auth';
-import { ArrowUpDown, PlusCircle, CheckCircle, Trash2, Edit, Star, Linkedin, Mail, ExternalLink, X, Users, Kanban, ChevronLeft, Folder, ChevronsUpDown, FolderPlus, UserPlus, Database, Phone, LogOut } from 'lucide-react';
+import { AlertTriangle, ArrowUpDown, PlusCircle, CheckCircle, Trash2, Edit, Star, Linkedin, Mail, ExternalLink, X, Users, Kanban, ChevronLeft, Folder, ChevronsUpDown, FolderPlus, UserPlus, Database, Phone, LogOut } from 'lucide-react';
 
-// --- CONFIGURAÇÃO DO FIREBASE ---
-// Corrigido para ser compatível com o ambiente de execução.
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'investidores-pacta-default';
+// --- INICIALIZAÇÃO SEGURA DO FIREBASE ---
+let app;
+let db;
+let auth;
+let firebaseInitializationError = null;
+let firebaseConfig = {};
+let appId = 'investidores-pacta-default';
 
+try {
+    // Corrigido para ser compatível com diferentes ambientes de execução.
+    if (typeof __firebase_config !== 'undefined') {
+        firebaseConfig = JSON.parse(__firebase_config);
+        appId = typeof __app_id !== 'undefined' ? __app_id : 'investidores-pacta-default';
+    } else if (import.meta.env.VITE_FIREBASE_API_KEY) {
+        // Fallback para ambientes Vite padrão (como desenvolvimento local)
+        firebaseConfig = {
+            apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+            authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+            projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+            storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+            messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+            appId: import.meta.env.VITE_FIREBASE_APP_ID,
+            measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
+        };
+        appId = import.meta.env.VITE_APP_ID_MAIN || 'investidores-pacta-default';
+    }
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
+    // Validação crucial para evitar a tela branca.
+    if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
+        throw new Error("As variáveis de ambiente do Firebase não foram encontradas. Verifique a configuração na Vercel ou no ambiente de execução.");
+    }
+
+    app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    auth = getAuth(app);
+} catch (error) {
+    console.error("ERRO CRÍTICO NA INICIALIZAÇÃO DO FIREBASE:", error);
+    if (error instanceof FirebaseError) {
+        firebaseInitializationError = `Erro do Firebase: ${error.code}. Verifique as chaves de API e as configurações do projeto.`;
+    } else {
+        firebaseInitializationError = error.message;
+    }
+}
+
 
 // --- CONTEXTO PARA DADOS GLOBAIS ---
 const DataContext = createContext();
 
-// --- COMPONENTES DA UI (Modal, Inputs, etc.) ---
+// --- COMPONENTES DA UI ---
 
 const FullPageLoader = ({ text = "Carregando Investidores Pacta..."}) => (
     <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
@@ -80,7 +115,6 @@ const TextareaField = ({ label, ...props }) => (
     </div>
 );
 
-// --- COMPONENTES ATUALIZADOS E NOVOS ---
 
 const EditableStarRating = ({ score, onSave }) => {
     const [hoverScore, setHoverScore] = useState(0);
@@ -103,15 +137,10 @@ const ProjectForm = ({ projectToEdit, onClose }) => {
     useEffect(() => { if (projectToEdit) setFormData({ name: projectToEdit.name, description: projectToEdit.description }); }, [projectToEdit]);
     const handleChange = (e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
     const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (!userId) return;
-        setIsSaving(true);
+        e.preventDefault(); if (!userId) return; setIsSaving(true);
         try {
-            if (projectToEdit) {
-                await updateDoc(doc(db, 'artifacts', appId, 'users', userId, 'projects', projectToEdit.id), formData);
-            } else {
-                await addDoc(collection(db, 'artifacts', appId, 'users', userId, 'projects'), { ...formData, createdAt: new Date() });
-            }
+            if (projectToEdit) await updateDoc(doc(db, 'artifacts', appId, 'users', userId, 'projects', projectToEdit.id), formData);
+            else await addDoc(collection(db, 'artifacts', appId, 'users', userId, 'projects'), { ...formData, createdAt: new Date() });
             onClose();
         } catch (error) { console.error("Erro ao salvar projeto:", error); } 
         finally { setIsSaving(false); }
@@ -133,7 +162,6 @@ const CsvImportModal = ({ onClose }) => {
     const [csvData, setCsvData] = useState('');
     const [isImporting, setIsImporting] = useState(false);
     const expectedHeaders = "NomeFantasia;Classificação;Tipo;Setor;Crédito/Equity;Nota;Justificativa;Email 1;Email 2;Telefone;Linkedin";
-
     const handleImport = async () => {
         if (!csvData.trim()) { alert("Por favor, cole os dados do seu CSV."); return; }
         setIsImporting(true);
@@ -207,12 +235,10 @@ const AddInvestorToProjectModal = ({ onClose, selectedProjectId }) => {
         <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                 <SelectField label="Filtrar por Classificação" value={classificationFilter} onChange={(e) => setClassificationFilter(e.target.value)}>
-                    <option value="">Todas as Classificações</option>
-                    {uniqueClassifications.map(c => <option key={c} value={c}>{c}</option>)}
+                    <option value="">Todas as Classificações</option> {uniqueClassifications.map(c => <option key={c} value={c}>{c}</option>)}
                 </SelectField>
                 <SelectField label="Filtrar por Setor" value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)}>
-                    <option value="">Todos os Setores</option>
-                    {uniqueSectors.map(s => <option key={s} value={s}>{s}</option>)}
+                    <option value="">Todos os Setores</option> {uniqueSectors.map(s => <option key={s} value={s}>{s}</option>)}
                 </SelectField>
             </div>
             <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
@@ -257,9 +283,6 @@ const ProjectSelector = () => {
     );
 };
 
-
-// --- VIEWS PRINCIPAIS (ATUALIZADAS) ---
-
 const MasterInvestorList = ({ onSelectInvestor }) => {
     const { masterInvestors, userId } = useContext(DataContext);
     const [searchTerm, setSearchTerm] = useState('');
@@ -267,7 +290,6 @@ const MasterInvestorList = ({ onSelectInvestor }) => {
     const getUniqueValues = (key) => useMemo(() => [...new Set(masterInvestors.map(item => item[key]).filter(Boolean))], [masterInvestors]);
     const uniqueClassifications = getUniqueValues('classificacao');
     const uniqueSectors = getUniqueValues('setor');
-    const uniqueCreditoEquity = getUniqueValues('creditoEquity');
     const filteredInvestors = useMemo(() => {
         return masterInvestors.filter(investor => {
             const searchMatch = searchTerm === '' || investor.nomeFantasia.toLowerCase().includes(searchTerm.toLowerCase()) || (investor.setor && investor.setor.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -487,6 +509,7 @@ export default function App() {
     const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
 
     useEffect(() => {
+        if(firebaseInitializationError) { setIsLoading(false); return; }
         const unsub = onAuthStateChanged(auth, async user => {
             if (user) { setUserId(user.uid); }
             else { setUserId(null); setIsLoading(false); }
@@ -535,6 +558,7 @@ export default function App() {
 
     const handleBack = () => setSelectedInvestor(null);
     
+    if (firebaseInitializationError) return <FirebaseErrorDisplay error={firebaseInitializationError} />;
     if (isLoading) return <FullPageLoader />;
     if (!userId) return <LoginPage />;
     
@@ -580,58 +604,52 @@ const LoginPage = () => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-
     const handleSubmit = async (e) => {
-        e.preventDefault();
-        setError('');
-        setIsLoading(true);
+        e.preventDefault(); setError(''); setIsLoading(true);
         try {
-            if (isLogin) {
-                await signInWithEmailAndPassword(auth, email, password);
-            } else {
-                await createUserWithEmailAndPassword(auth, email, password);
-            }
+            if (isLogin) await signInWithEmailAndPassword(auth, email, password);
+            else await createUserWithEmailAndPassword(auth, email, password);
         } catch (err) {
             let friendlyError = "Ocorreu um erro. Tente novamente.";
-            if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-                friendlyError = "E-mail ou senha incorretos.";
-            } else if (err.code === 'auth/email-already-in-use') {
-                friendlyError = "Este e-mail já está em uso.";
-            } else if (err.code === 'auth/weak-password') {
-                friendlyError = "A senha deve ter pelo menos 6 caracteres.";
-            }
-             setError(friendlyError);
-        } finally {
-            setIsLoading(false);
-        }
+            if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') friendlyError = "E-mail ou senha incorretos.";
+            else if (err.code === 'auth/email-already-in-use') friendlyError = "Este e-mail já está em uso.";
+            else if (err.code === 'auth/weak-password') friendlyError = "A senha deve ter pelo menos 6 caracteres.";
+            setError(friendlyError);
+        } finally { setIsLoading(false); }
     };
-
     return (
         <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
              {isLoading && <FullPageLoader text={isLogin ? "Entrando..." : "Criando conta..."} />}
             <div className="w-full max-w-md">
-                <div className="text-center mb-8">
-                    <h1 className="text-4xl font-bold text-blue-500">Investidores Pacta</h1>
-                    <p className="text-gray-400">Seu CRM para captação de recursos.</p>
-                </div>
+                <div className="text-center mb-8"><h1 className="text-4xl font-bold text-blue-500">Investidores Pacta</h1><p className="text-gray-400">Seu CRM para captação de recursos.</p></div>
                 <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl border border-gray-700">
                     <h2 className="text-2xl font-bold text-white text-center mb-6">{isLogin ? 'Login' : 'Criar Conta'}</h2>
                     <form onSubmit={handleSubmit} className="space-y-6">
                         <InputField label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
                         <InputField label="Senha" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
                         {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-                        <button type="submit" className="w-full py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-semibold">
-                            {isLogin ? 'Entrar' : 'Cadastrar'}
-                        </button>
+                        <button type="submit" className="w-full py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-semibold">{isLogin ? 'Entrar' : 'Cadastrar'}</button>
                     </form>
-                    <p className="text-center text-gray-400 text-sm mt-6">
-                        {isLogin ? 'Não tem uma conta?' : 'Já tem uma conta?'}
-                        <button onClick={() => setIsLogin(!isLogin)} className="font-semibold text-blue-400 hover:underline ml-1">
-                            {isLogin ? 'Cadastre-se' : 'Faça login'}
-                        </button>
-                    </p>
+                    <p className="text-center text-gray-400 text-sm mt-6">{isLogin ? 'Não tem uma conta?' : 'Já tem uma conta?'}<button onClick={() => setIsLogin(!isLogin)} className="font-semibold text-blue-400 hover:underline ml-1">{isLogin ? 'Cadastre-se' : 'Faça login'}</button></p>
                 </div>
             </div>
         </div>
     );
-}
+};
+
+// NOVO: Componente para exibir erro de inicialização
+const FirebaseErrorDisplay = ({ error }) => {
+    return (
+        <div className="min-h-screen bg-red-900/10 text-white flex items-center justify-center p-4">
+            <div className="text-center bg-gray-800 p-8 rounded-lg shadow-2xl border border-red-500 max-w-2xl">
+                <AlertTriangle className="mx-auto h-12 w-12 text-red-500" />
+                <h1 className="text-2xl font-bold mt-4 mb-2">Erro Crítico na Configuração</h1>
+                <p className="text-gray-300">Não foi possível conectar ao banco de dados.</p>
+                <div className="mt-4 text-left text-sm text-red-300 bg-red-900/50 p-3 rounded-md">
+                    <p><strong>Mensagem do Erro:</strong> {error}</p>
+                </div>
+                <p className="mt-6 text-gray-400">Por favor, verifique se as 'Environment Variables' no seu painel da Vercel estão corretas e faça o 'Redeploy' do projeto. Consulte o guia para mais detalhes.</p>
+            </div>
+        </div>
+    );
+};
